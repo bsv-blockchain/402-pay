@@ -67,15 +67,22 @@ fetch402.clearCache()
 
 ## Headers
 
-| Header | Direction | Description |
-|---|---|---|
-| `x-bsv-sats` | Server → Client | Required satoshi amount |
-| `x-bsv-server` | Server → Client | Server identity public key |
-| `x-bsv-beef` | Client → Server | Base64-encoded BEEF transaction |
-| `x-bsv-sender` | Client → Server | Client identity public key |
-| `x-bsv-nonce` | Client → Server | Base64-encoded derivation prefix |
-| `x-bsv-time` | Client → Server | Unix millisecond timestamp |
-| `x-bsv-vout` | Client → Server | Payment output index |
+### Server → Client
+
+| Header | Description |
+|---|---|
+| `x-bsv-sats` | Required satoshi amount |
+| `x-bsv-server` | Server identity public key |
+
+### Client → Server
+
+| Header | Description |
+|---|---|
+| `x-bsv-beef` | Base64-encoded BEEF transaction |
+| `x-bsv-sender` | Client identity public key |
+| `x-bsv-nonce` | Base64-encoded derivation prefix |
+| `x-bsv-time` | Unix millisecond timestamp |
+| `x-bsv-vout` | Payment output index |
 
 ## Replay Protection
 
