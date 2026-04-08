@@ -63,7 +63,7 @@ export function create402Fetch(options: Payment402Options) {
     if (!satsHeader || !serverHeader) return res
 
     const satoshis = Number.parseInt(satsHeader)
-    if (isNaN(satoshis) || satoshis <= 0) return res
+    if (Number.isNaN(satoshis) || satoshis <= 0) return res
 
     // Construct payment
     const serverIdentityKey = serverHeader

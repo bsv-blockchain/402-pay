@@ -80,7 +80,7 @@ export async function validatePayment(
 
   // Validate timestamp freshness
   const timestamp = Number(time)
-  if (isNaN(timestamp) || Math.abs(Date.now() - timestamp) > paymentWindowMs) return null
+  if (Number.isNaN(timestamp) || Math.abs(Date.now() - timestamp) > paymentWindowMs) return null
 
   const beefArr = Utils.toArray(beef, 'base64')
   const beefObj = Beef.fromBinary(beefArr)
@@ -91,7 +91,7 @@ export async function validatePayment(
   // Verify the specified output carries at least the required satoshi amount
   const voutIndex = Number.parseInt(vout)
   const output = lastTx.tx.outputs[voutIndex]
-  if (!output || output.satoshis === undefined || output.satoshis < requiredSats) return null
+  if (output?.satoshis === undefined || output.satoshis < requiredSats) return null
 
   const result = await wallet.internalizeAction({
     tx: beefArr,
@@ -165,11 +165,11 @@ export function createPaymentMiddleware(options: PaymentMiddlewareOptions) {
       console.log(`Payment accepted: ${req.path} | ${price} sats | txid: ${result.txid}`)
       next()
     } catch {
-      if (!identityKey) {
-        res.status(500).end()
-      } else {
+      if (identityKey) {
         const price = calculatePrice(req.path) ?? 100
         send402(res, identityKey, price)
+      } else {
+        res.status(500).end()
       }
     }
   }
