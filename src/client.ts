@@ -9,10 +9,88 @@ export interface Payment402Options {
   cacheTimeoutMs?: number
 }
 
+/** The five headers the client must attach to a paid request. */
+export interface PaymentHeaders {
+  [HEADERS.BEEF]: string
+  [HEADERS.SENDER]: string
+  [HEADERS.NONCE]: string
+  [HEADERS.TIME]: string
+  [HEADERS.VOUT]: string
+}
+
 interface CacheEntry {
   response: Response
   body: string
   timestamp: number
+}
+
+/**
+ * Constructs the five BRC-121 payment headers for a given URL, satoshi amount,
+ * and server identity key without performing any fetch.
+ *
+ * Useful for service workers, custom fetch wrappers, or any environment where
+ * you want to build and attach payment headers manually.
+ *
+ * ```ts
+ * import { constructPaymentHeaders } from '@bsv/402-pay/client'
+ *
+ * const headers = await constructPaymentHeaders(wallet, 'https://example.com/articles/foo', 100, serverKey)
+ * const res = await fetch('https://example.com/articles/foo', { headers })
+ * ```
+ */
+export async function constructPaymentHeaders(
+  wallet: WalletInterface,
+  url: string,
+  satoshis: number,
+  serverIdentityKey: string
+): Promise<PaymentHeaders> {
+  const originator = new URL(url).origin
+  const nonce = Utils.toBase64(Random(8))
+  const time = String(Date.now())
+  const timeSuffixB64 = Utils.toBase64(Utils.toArray(time, 'utf8'))
+
+  // Derive recipient public key via BRC-42
+  const { publicKey: derivedPubKey } = await wallet.getPublicKey({
+    protocolID: BRC29_PROTOCOL_ID,
+    keyID: `${nonce} ${timeSuffixB64}`,
+    counterparty: serverIdentityKey
+  }, originator)
+
+  const pkh = PublicKey.fromString(derivedPubKey).toHash('hex') as string
+
+  // Get sender identity key
+  const { publicKey: senderIdentityKey } = await wallet.getPublicKey(
+    { identityKey: true },
+    originator
+  )
+
+  // Create payment transaction
+  const actionResult = await wallet.createAction({
+    description: `Paid Content: ${new URL(url).pathname}`,
+    outputs: [{
+      satoshis,
+      lockingScript: `76a914${pkh}88ac`,
+      outputDescription: '402 web payment',
+      customInstructions: JSON.stringify({
+        derivationPrefix: nonce,
+        derivationSuffix: timeSuffixB64,
+        serverIdentityKey
+      }),
+      tags: ['402-payment']
+    }],
+    labels: ['402-payment'],
+    options: { randomizeOutputs: false }
+  }, originator)
+
+  const txBase64 = Utils.toBase64(actionResult.tx as number[])
+
+  return {
+    [HEADERS.BEEF]: txBase64,
+    [HEADERS.SENDER]: senderIdentityKey,
+    [HEADERS.NONCE]: nonce,
+    [HEADERS.TIME]: time,
+    [HEADERS.VOUT]: '0'
+  }
 }
 
 /**
@@ -65,58 +143,15 @@ export function create402Fetch(options: Payment402Options) {
     const satoshis = Number.parseInt(satsHeader)
     if (Number.isNaN(satoshis) || satoshis <= 0) return res
 
-    // Construct payment
-    const serverIdentityKey = serverHeader
-    const nonce = Utils.toBase64(Random(8))
-    const time = String(Date.now())
-    const timeSuffixB64 = Buffer.from(time).toString('base64')
-    const originator = new URL(url).origin
-
-    // Derive recipient public key via BRC-42
-    const { publicKey: derivedPubKey } = await wallet.getPublicKey({
-      protocolID: BRC29_PROTOCOL_ID,
-      keyID: `${nonce} ${timeSuffixB64}`,
-      counterparty: serverIdentityKey
-    }, originator)
-
-    const pkh = PublicKey.fromString(derivedPubKey).toHash('hex') as string
-
-    // Get sender identity key
-    const { publicKey: senderIdentityKey } = await wallet.getPublicKey(
-      { identityKey: true },
-      originator
-    )
-
-    // Create payment transaction
-    const actionResult = await wallet.createAction({
-      description: `Paid Content: ${new URL(url).pathname}`,
-      outputs: [{
-        satoshis,
-        lockingScript: `76a914${pkh}88ac`,
-        outputDescription: '402 web payment',
-        customInstructions: JSON.stringify({
-          derivationPrefix: nonce,
-          derivationSuffix: timeSuffixB64,
-          serverIdentityKey
-        }),
-        tags: ['402-payment']
-      }],
-      labels: ['402-payment'],
-      options: { randomizeOutputs: false }
-    }, originator)
-
-    const txBase64 = Utils.toBase64(actionResult.tx as number[])
+    // Construct payment headers
+    const paymentHeaders = await constructPaymentHeaders(wallet, url, satoshis, serverHeader)
 
     // Retransmit with payment headers
     const paidRes = await fetch(url, {
       ...init,
       headers: {
         ...(init.headers as Record<string, string> | undefined),
-        [HEADERS.BEEF]: txBase64,
-        [HEADERS.SENDER]: senderIdentityKey,
-        [HEADERS.NONCE]: nonce,
-        [HEADERS.TIME]: time,
-        [HEADERS.VOUT]: '0'
+        ...paymentHeaders
       }
     })
 

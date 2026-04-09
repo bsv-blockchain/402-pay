@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { Utils } from '@bsv/sdk'
 import type { WalletInterface } from '@bsv/sdk'
-import { create402Fetch } from './client.js'
+import { create402Fetch, constructPaymentHeaders } from './client.js'
 import { HEADERS, BRC29_PROTOCOL_ID } from './constants.js'
 
 // ---------------------------------------------------------------------------
@@ -13,7 +14,7 @@ const SERVER_KEY = '03f8104e2b313136ef1b84fcd9c8aadb775beb89a8207c942b31ab89e160
 const DERIVED_KEY = '03f8104e2b313136ef1b84fcd9c8aadb775beb89a8207c942b31ab89e160ba4c86'
 const SENDER_KEY = '03f8104e2b313136ef1b84fcd9c8aadb775beb89a8207c942b31ab89e160ba4c86'
 const FAKE_TX_BYTES = [1, 2, 3, 4, 5]
-const FAKE_TX_BASE64 = Buffer.from(FAKE_TX_BYTES).toString('base64')
+const FAKE_TX_BASE64 = Utils.toBase64(FAKE_TX_BYTES)
 
 /** A Response factory — easier than constructing Response objects inline */
 function makeResponse(status: number, body = '', headers: Record<string, string> = {}): Response {
@@ -66,6 +67,108 @@ function makeWallet(): WalletInterface {
     discoverByAttributes: vi.fn(),
   } as unknown as WalletInterface
 }
+
+// ---------------------------------------------------------------------------
+// constructPaymentHeaders
+// ---------------------------------------------------------------------------
+
+describe('constructPaymentHeaders', () => {
+  it('returns all five payment headers', async () => {
+    const wallet = makeWallet()
+    const headers = await constructPaymentHeaders(wallet, TEST_URL, 100, SERVER_KEY)
+    expect(headers[HEADERS.BEEF]).toBeDefined()
+    expect(headers[HEADERS.SENDER]).toBeDefined()
+    expect(headers[HEADERS.NONCE]).toBeDefined()
+    expect(headers[HEADERS.TIME]).toBeDefined()
+    expect(headers[HEADERS.VOUT]).toBeDefined()
+  })
+
+  it('always sets vout to "0"', async () => {
+    const wallet = makeWallet()
+    const headers = await constructPaymentHeaders(wallet, TEST_URL, 100, SERVER_KEY)
+    expect(headers[HEADERS.VOUT]).toBe('0')
+  })
+
+  it('sets the sender to the wallet identity key', async () => {
+    const wallet = makeWallet()
+    const headers = await constructPaymentHeaders(wallet, TEST_URL, 100, SERVER_KEY)
+    expect(headers[HEADERS.SENDER]).toBe(SENDER_KEY)
+  })
+
+  it('sets beef to the base64-encoded tx from createAction', async () => {
+    const wallet = makeWallet()
+    const headers = await constructPaymentHeaders(wallet, TEST_URL, 100, SERVER_KEY)
+    expect(headers[HEADERS.BEEF]).toBe(FAKE_TX_BASE64)
+  })
+
+  it('sets time to a numeric string (unix ms)', async () => {
+    const wallet = makeWallet()
+    const before = Date.now()
+    const headers = await constructPaymentHeaders(wallet, TEST_URL, 100, SERVER_KEY)
+    const after = Date.now()
+    const t = Number(headers[HEADERS.TIME])
+    expect(Number.isNaN(t)).toBe(false)
+    expect(t).toBeGreaterThanOrEqual(before)
+    expect(t).toBeLessThanOrEqual(after)
+  })
+
+  it('derives timeSuffixB64 using Utils.toBase64(Utils.toArray(time, "utf8"))', async () => {
+    const wallet = makeWallet()
+    const fixedNow = 1_700_000_000_000
+    vi.spyOn(Date, 'now').mockReturnValue(fixedNow)
+    const expectedSuffix = Utils.toBase64(Utils.toArray(String(fixedNow), 'utf8'))
+    await constructPaymentHeaders(wallet, TEST_URL, 100, SERVER_KEY)
+    expect(wallet.getPublicKey).toHaveBeenCalledWith(
+      expect.objectContaining({
+        keyID: expect.stringContaining(expectedSuffix)
+      }),
+      expect.any(String)
+    )
+    vi.restoreAllMocks()
+  })
+
+  it('uses the URL origin as the originator for all wallet calls', async () => {
+    const wallet = makeWallet()
+    await constructPaymentHeaders(wallet, 'https://pay.example.com/item/1', 50, SERVER_KEY)
+    for (const call of (wallet.getPublicKey as ReturnType<typeof vi.fn>).mock.calls) {
+      expect(call[1]).toBe('https://pay.example.com')
+    }
+    expect((wallet.createAction as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBe('https://pay.example.com')
+  })
+
+  it('passes the correct satoshi amount to createAction', async () => {
+    const wallet = makeWallet()
+    await constructPaymentHeaders(wallet, TEST_URL, 777, SERVER_KEY)
+    expect(wallet.createAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputs: expect.arrayContaining([
+          expect.objectContaining({ satoshis: 777 })
+        ])
+      }),
+      expect.any(String)
+    )
+  })
+
+  it('derives the recipient key using BRC29_PROTOCOL_ID and the server key as counterparty', async () => {
+    const wallet = makeWallet()
+    await constructPaymentHeaders(wallet, TEST_URL, 100, SERVER_KEY)
+    const derivationCall = (wallet.getPublicKey as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([args]) => args.protocolID !== undefined
+    )
+    expect(derivationCall).toBeDefined()
+    expect(derivationCall![0].protocolID).toEqual(BRC29_PROTOCOL_ID)
+    expect(derivationCall![0].counterparty).toBe(SERVER_KEY)
+  })
+
+  it('does not call fetch', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const wallet = makeWallet()
+    await constructPaymentHeaders(wallet, TEST_URL, 100, SERVER_KEY)
+    expect(fetchMock).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+})
 
 // ---------------------------------------------------------------------------
 // create402Fetch — non-payment paths
