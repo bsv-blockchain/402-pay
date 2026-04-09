@@ -37,6 +37,10 @@
     "brc-121",
     "middleware"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bsv-blockchain/402-pay"
+  },
   "author": "Deggen <d.kellenschwiler@bsvassociation.org>",
   "license": "SEE LICENSE IN LICENSE",
   "peerDependencies": {
